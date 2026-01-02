@@ -3,8 +3,9 @@ from discord.ext import commands
 import asyncio
 
 # Gemini API用ライブラリ
+# Gemini API用ライブラリ
 from google import genai
-from google.genai.types import GenerateContentConfig
+from google.genai.types import GenerateContentConfig, ThinkingConfig
 
 import os
 import aiohttp
@@ -29,6 +30,7 @@ TOKEN = read_credential("discord_token.txt")
 GEMINI_API_KEY = read_credential("gemini_api_key.txt")
 
 # --- LM Studio設定 ---
+ENABLE_COMPARISON = False  # True にすると A/B テストが有効になる
 LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
 LM_MODELS = ["qwen/qwen3-vl-4b", "google/gemma-3-4b"]
 # 推奨パラメータ設定
@@ -80,10 +82,14 @@ def get_conversation_context(channel_id: int) -> str:
 # 日本語→英語の翻訳（context を含む）
 async def translate_to_english(text: str, context: str = "") -> str:
     system_instruction = (
-        f"以下の会話の文脈を考慮してください:\n{context}\n"
-        "あなたはプロの翻訳者です。以下の日本語の文章を、原文の意味やニュアンスを損なわず、正確に英語へ翻訳してください。"
-        "ただし、Discord内の絵文字やメンション（例：:smile: や @username）は翻訳せず、そのまま出力してください。"
-        "翻訳結果以外の余計な文章は一切出力しないでください。"
+        "あなたはプロの翻訳者です。指示に従って翻訳を行ってください。\n\n"
+        "### 会話の文脈 (翻訳しないでください):\n"
+        "以下の内容は会話の流れを理解するための参考情報です。この内容自体を翻訳したり、出力に含めたりしないでください。\n"
+        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
+        "### 翻訳指示:\n"
+        "入力された日本語の文章を、原文の意味やニュアンスを損なわず、正確に英語へ翻訳してください。\n"
+        "Discord内の絵文字やメンション（例：:smile: や @username）は翻訳せず、そのまま出力してください。\n"
+        "翻訳結果以外の余計な文章（「翻訳結果：」など）は一切出力しないでください。"
     )
     response = await async_client.models.generate_content(
         model="gemini-3-flash-preview",
@@ -92,6 +98,7 @@ async def translate_to_english(text: str, context: str = "") -> str:
             system_instruction=system_instruction,
             temperature=0,
             candidate_count=1,
+            thinking_config=ThinkingConfig(include_thoughts=False)
         )
     )
     return response.text.strip()
@@ -99,18 +106,23 @@ async def translate_to_english(text: str, context: str = "") -> str:
 # 英語→日本語の翻訳（context を含む）
 async def translate_to_japanese(text: str, context: str = "") -> str:
     system_instruction = (
-        f"Consider the following conversation context:\n{context}\n"
-        "You are a professional translator. Please translate the following English text into Japanese accurately while preserving its original nuance and meaning."
-        "However, do not translate any Discord emojis or mentions (e.g., :smile: or @username); output them as is."
-        "Do not include any additional text such as 'Below is the translation'—only output the translation."
+        "You are a professional translator. Follow the instructions below.\n\n"
+        "### Conversation Context (DO NOT TRANSLATE):\n"
+        "The following content is for reference only to understand the conversation flow. Do not translate this content or include it in the output.\n"
+        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
+        "### Translation Instructions:\n"
+        "Translate the input English text into Japanese accurately while preserving its original nuance and meaning.\n"
+        "Do not translate Discord emojis or mentions (e.g., :smile: or @username); output them as is.\n"
+        "Output ONLY the translated text without any preamble or explanation."
     )
     response = await async_client.models.generate_content(
-        model="gemini-3.0-flash",
+        model="gemini-3-flash-preview",
         contents=text,
         config=GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0,
             candidate_count=1,
+            thinking_config=ThinkingConfig(include_thoughts=False)
         )
     )
     return response.text.strip()
@@ -213,17 +225,27 @@ async def run_comparison_task(message: discord.Message, context: str):
     original_text = message.content
     target_language = "English" if is_japanese(original_text) else "Japanese"
     
-    # プロンプト作成
-    system_instruction = (
-        f"以下の会話の文脈を考慮してください:\n{context}\n"
-        "あなたはプロの翻訳者です。以下の文章を、原文の意味やニュアンスを損なわず、正確に翻訳してください。"
-        "Discordの絵文字やメンションは翻訳せずそのままにしてください。"
-        "翻訳結果のみを出力してください。"
-    )
+    # プロンプト作成 (文脈と指示を明確に分離)
     if target_language == "English":
-        system_instruction += " Translate into English."
+        system_instruction = (
+            "あなたはプロの翻訳者です。\n"
+            "### 会話の文脈 (翻訳禁止):\n"
+            f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
+            "### 翻訳指示:\n"
+            "上記の文脈を理解の助けとした上で、以下の文章をプロフェッショナルな英語に翻訳してください。\n"
+            "Discordの絵文字やメンションはそのままにしてください。\n"
+            "翻訳結果のみを出力してください。文脈の内容を翻訳に混ぜないでください。"
+        )
     else:
-        system_instruction += " Translate into Japanese."
+        system_instruction = (
+            "あなたはプロの翻訳者です。\n"
+            "### 会話の文脈 (翻訳禁止):\n"
+            f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
+            "### 翻訳指示:\n"
+            "上記の文脈を理解の助けとした上で、以下の文章をプロフェッショナルな日本語に翻訳してください。\n"
+            "Discordの絵文字やメンションはそのままにしてください。\n"
+            "翻訳結果のみを出力してください。文脈の内容を翻訳に混ぜないでください。"
+        )
 
     messages = [
         {"role": "system", "content": system_instruction},
@@ -264,13 +286,70 @@ async def run_comparison_task(message: discord.Message, context: str):
     
     await message.channel.send(content="翻訳品質向上のため、ご協力をお願いします！", embed=embed, view=view)
 
+class SuggestReplyView(discord.ui.View):
+    def __init__(self, source_channel_id):
+        super().__init__(timeout=None)
+        self.source_channel_id = source_channel_id
+
+    @discord.ui.button(label="返信サジェスト (Gemini-3 Flash)", style=discord.ButtonStyle.success, emoji="💡")
+    async def suggest_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        context = get_conversation_context(self.source_channel_id)
+        
+        system_instruction = (
+            f"以下はチャットの会話ログです:\n{context}\n"
+            "あなたは、この会話に参加しているユーザーのひとりとして、自然な返信を考えてください。"
+            "直近のメッセージに対する返答として適切なものを1つ提案してください。"
+            "返信案のみを出力してください（「返信案:」などの接頭辞は不要）。"
+        )
+
+        try:
+            response = await async_client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents="返信案を考えて。",
+                config=GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.7, 
+                    candidate_count=1,
+                    thinking_config=ThinkingConfig(include_thoughts=False)
+                )
+            )
+            suggestion = response.text.strip()
+        except Exception as e:
+            suggestion = f"生成エラー: {e}"
+
+        await interaction.followup.send(content=f"💡 **返信サジェスト (Gemini-3 Flash)**:\n\n{suggestion}", ephemeral=True)
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 提案メッセージ管理: channel_id -> message object
+suggestion_messages = {}
+
 @bot.event
 async def on_ready():
     print(f"Bot is ready. Logged in as {bot.user}")
+    
+    # 全監視チャンネルの履歴をキャッシュ
+    target_channels = set(CHANNEL_JA_EN_PAIRS.keys()) | set(CHANNEL_EN_JA.keys())
+    print("Caching conversation history...")
+    for channel_id in target_channels:
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            continue
+        try:
+            history = []
+            async for msg in channel.history(limit=10):
+                if not msg.author.bot:
+                     history.append(f"{msg.author.display_name}: {msg.content}")
+            # historyは新しい順に取れるので、古い順（会話順）に直す
+            conversation_memory[channel_id] = history[::-1]
+            print(f"Cached {len(history)} messages for channel {channel.name} ({channel_id})")
+        except Exception as e:
+            print(f"Failed to cache history for channel {channel_id}: {e}")
+    print("Conversation history cached.")
 
 def build_forward_content(message: discord.Message, translated_text: str) -> str:
     header = f"__**{message.author.mention}**__\n"
@@ -356,19 +435,54 @@ async def forward_message(message: discord.Message) -> discord.Message:
         users=False,
         replied_user=False
     )
+    
+    # 転送メッセージ自体にはViewを付けない
     forwarded = await target_channel.send(content=content_to_send, reference=ref, mention_author=False, allowed_mentions=allowed_mentions)
 
     forward_map[(source_channel_id, message.id)] = forwarded
     forward_map[(target_channel.id, forwarded.id)] = message
 
-    # LM Studio比較タスクをバックグラウンドで開始
+    # サジェストボタンを「元のチャンネル」に送信（自分だけに送信、という概念はBotではEphemeral以外難しいが、
+    # ユーザー要望は「送信した元のチャンネルに送られるように」かつ「自分にだけ（前の文脈から見ると）」
+    # しかしBotから通常メッセージとして送ると全員に見える。EphemeralはInteraction応答でしか使えない。
+    # ここでは要望通り「元のチャンネルに送る」を優先し、普通のメッセージとして送る。
+    # 30秒で消えるので邪魔にはなりにくい。
+    
     if message.content:
+        # 既存のサジェストメッセージがあれば消す
+        if source_channel_id in suggestion_messages:
+            try:
+                await suggestion_messages[source_channel_id].delete()
+            except:
+                pass
+            del suggestion_messages[source_channel_id]
+
+        view = SuggestReplyView(source_channel_id)
+        try:
+            suggestion_msg = await message.channel.send("💬 返信サジェスト (30秒で消えます)", view=view, delete_after=30)
+            suggestion_messages[source_channel_id] = suggestion_msg
+        except Exception as e:
+            print(f"Failed to send suggestion message: {e}")
+
+    # LM Studio比較タスクをバックグラウンドで開始
+    if ENABLE_COMPARISON and message.content:
          asyncio.create_task(run_comparison_task(message, context if 'context' in locals() else get_conversation_context(source_channel_id)))
 
     return forwarded
 
 @bot.event
 async def on_message(message: discord.Message):
+    # 会話が進んだら古いサジェストを消す
+    if message.channel.id in suggestion_messages:
+        # 自分が送ったサジェストメッセージ自身でなければ消す（ユーザーの発言等）
+        msg = suggestion_messages[message.channel.id]
+        if msg and msg.id != message.id: 
+            try:
+                await msg.delete()
+            except:
+                pass
+            del suggestion_messages[message.channel.id]
+
     if message.channel.id in CHANNEL_JA_EN_PAIRS or message.channel.id in CHANNEL_EN_JA:
         forward_map[(message.channel.id, message.id)] = message
         conversation_memory.setdefault(message.channel.id, [])

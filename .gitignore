@@ -1,7 +1,6 @@
-# Ignore everything
-*
-
-# Whitelist specific files
-!bot.py
-!.gitignore
-
+discord_token.txt
+gemini_api_key.txt
+comparison_log.csv
+__pycache__/
+*.mp3
+geminisc.py
