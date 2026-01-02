@@ -541,8 +541,15 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
             translated = ""
             
     new_content = build_forward_content(after, translated)
+    
+    # Configure to prevent unwanted notifications
+    allowed_mentions = discord.AllowedMentions(
+        users=False,
+        replied_user=False
+    )
+    
     try:
-        await forwarded_msg.edit(content=new_content)
+        await forwarded_msg.edit(content=new_content, allowed_mentions=allowed_mentions)
     except Exception as e:
         print("Edit error:", e)
 
