@@ -35,6 +35,12 @@ A Discord bot that provides real-time bilingual translation (Japanese ↔ Englis
     Create the following files in the root directory:
     -   `discord_token.txt`: Paste your Discord Bot Token.
     -   `gemini_api_key.txt`: Paste your Google Gemini API Key.
+    -   **Channel Pairing**: Open `bot.py` and configure the `CHANNEL_JA_EN_PAIRS` dictionary with your Discord channel IDs:
+        ```python
+        CHANNEL_JA_EN_PAIRS = {
+            123456789012345678: 987654321098765432,  # Japanese Channel ID : English Channel ID
+        }
+        ```
 
 4.  **Run the Bot**
     ```bash
