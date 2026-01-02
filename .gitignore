@@ -4,3 +4,4 @@ comparison_log.csv
 __pycache__/
 *.mp3
 geminisc.py
+run_bot.command
