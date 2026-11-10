@@ -1,12 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import asyncio
 import os
-import aiohttp
-import random
-import csv
-import datetime
 from storage import Store, TranslationPair
 
 # Gemini API Library
@@ -27,29 +22,6 @@ def read_credential(filename):
 
 TOKEN = read_credential("discord_token.txt")
 GEMINI_API_KEY = read_credential("gemini_api_key.txt")
-
-# --- LM Studio Settings ---
-ENABLE_COMPARISON = False  # Set to True to enable A/B testing
-LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
-LM_MODELS = ["qwen/qwen3-vl-4b", "google/gemma-3-4b"]
-
-# Recommended Parameter Settings
-LM_MODEL_PARAMS = {
-    "qwen/qwen3-vl-4b": {"temperature": 0.7, "top_p": 0.8},
-    "google/gemma-3-4b": {"temperature": 1.0, "top_p": 0.95},
-}
-
-# Lock for serializing LM Studio processing (VRAM conservation)
-lm_lock = asyncio.Lock()
-
-# Log file for comparison results
-COMPARISON_LOG_FILE = "comparison_log.csv"
-
-# Initialize log file with header if it doesn't exist
-if not os.path.exists(os.path.join(BASE_DIR, COMPARISON_LOG_FILE)):
-    with open(os.path.join(BASE_DIR, COMPARISON_LOG_FILE), 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Timestamp", "SourceChannelID", "MessageID", "ModelA", "ModelB", "Selected", "WinnerModel"])
 
 STORE = Store(os.environ.get("BOT_DATABASE", os.path.join(BASE_DIR, "bot.sqlite3")))
 
@@ -79,142 +51,10 @@ async def translate_text(text: str, source_language: str, target_language: str,
         raise RuntimeError("Translation provider returned an empty response")
     return response.text.strip()
 
-def is_japanese(text: str) -> bool:
-    """Checks if the text contains Japanese characters."""
-    for ch in text:
-        if ('\u3040' <= ch <= '\u30ff') or ('\u4e00' <= ch <= '\u9faf'):
-            return True
-    return False
-
 def get_conversation_context(channel_id: int) -> str:
     """Returns the conversation history for a specific channel."""
     messages = conversation_memory.get(channel_id, [])
     return "\n".join(messages)
-
-# --- LM Studio Comparison Logic ---
-
-async def query_lm_studio(model: str, messages: list) -> str:
-    """Calls the OpenAI-compatible API of LM Studio."""
-    params = LM_MODEL_PARAMS.get(model, {"temperature": 0.7, "top_p": 0.9})
-    
-    async with aiohttp.ClientSession() as session:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": params["temperature"],
-            "top_p": params["top_p"],
-        }
-        try:
-            async with session.post(LM_STUDIO_URL, json=payload, timeout=120) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data['choices'][0]['message']['content'].strip()
-                else:
-                    return f"Error: {resp.status}"
-        except Exception as e:
-            return f"Error: {e}"
-
-class ComparisonView(discord.ui.View):
-    """View class for A/B testing voting panel."""
-    def __init__(self, model_a_name, model_b_name, model_a_text, model_b_text, source_channel_id, message_id):
-        super().__init__(timeout=None)
-        self.model_a_name = model_a_name
-        self.model_b_name = model_b_name
-        self.model_a_text = model_a_text
-        self.model_b_text = model_b_text
-        self.source_channel_id = source_channel_id
-        self.message_id = message_id
-
-    async def log_result(self, interaction: discord.Interaction, selection: str, winner_model: str):
-        filepath = os.path.join(BASE_DIR, COMPARISON_LOG_FILE)
-        timestamp = datetime.datetime.now().isoformat()
-        try:
-            with open(filepath, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow([timestamp, self.source_channel_id, self.message_id, self.model_a_name, self.model_b_name, selection, winner_model])
-        except Exception as e:
-            print(f"Logging error: {e}")
-
-        await interaction.response.send_message(f"Thanks for voting! (Selected: {selection})", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except Exception as e:
-            print(f"Message delete error: {e}")
-
-    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-    async def button_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.log_result(interaction, "A", self.model_a_name)
-
-    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-    async def button_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.log_result(interaction, "B", self.model_b_name)
-
-    @discord.ui.button(label="Both Same", style=discord.ButtonStyle.secondary)
-    async def button_same(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.log_result(interaction, "Same", "Draw")
-
-    @discord.ui.button(label="N/A", style=discord.ButtonStyle.secondary)
-    async def button_unknown(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.log_result(interaction, "Unknown", "N/A")
-
-async def run_comparison_task(message: discord.Message, context: str):
-    """Executes translations using LM Studio models and displays the voting panel."""
-    original_text = message.content
-    target_language = "English" if is_japanese(original_text) else "Japanese"
-    
-    if target_language == "English":
-        system_instruction = (
-            "You are a professional translator.\n"
-            "### Conversation Context (DO NOT TRANSLATE):\n"
-            f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
-            "### Translation Instructions:\n"
-            "Translate the following text into professional English using the above context as a guide.\n"
-            "Keep Discord emojis and mentions intact.\n"
-            "Output ONLY the translation."
-        )
-    else:
-        system_instruction = (
-            "You are a professional translator.\n"
-            "### Conversation Context (DO NOT TRANSLATE):\n"
-            f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
-            "### Translation Instructions:\n"
-            "Translate the following text into professional Japanese using the above context as a guide.\n"
-            "Keep Discord emojis and mentions intact.\n"
-            "Output ONLY the translation."
-        )
-
-    messages = [
-        {"role": "system", "content": system_instruction},
-        {"role": "user", "content": original_text}
-    ]
-
-    translations = {}
-
-    # Sequential execution to save VRAM
-    async with lm_lock:
-        print(f"Starting comparison for message {message.id}...")
-        for model in LM_MODELS:
-            print(f"Querying {model}...")
-            result = await query_lm_studio(model, messages)
-            translations[model] = result
-            print(f"Finished {model}.")
-            await asyncio.sleep(1)
-
-    models = list(translations.keys())
-    if len(models) < 2:
-        return
-
-    random.shuffle(models)
-    model_a = models[0]
-    model_b = models[1]
-    
-    embed = discord.Embed(title="Translation Quality Comparison", description="Which translation is more natural and accurate?", color=0x00ff00)
-    embed.add_field(name="Original", value=original_text, inline=False)
-    embed.add_field(name="Model A", value=translations[model_a], inline=False)
-    embed.add_field(name="Model B", value=translations[model_b], inline=False)
-    
-    view = ComparisonView(model_a, model_b, translations[model_a], translations[model_b], message.channel.id, message.id)
-    await message.channel.send(content="Please help us improve translation quality!", embed=embed, view=view)
 
 class SuggestReplyView(discord.ui.View):
     """View class for reply suggestion button."""
@@ -412,8 +252,6 @@ async def forward_message(message: discord.Message) -> discord.Message | None:
                 "💬 Reply suggestion", view=SuggestReplyView(message.channel.id), delete_after=30)
         except discord.HTTPException as error:
             print(f"Could not post reply suggestion button: {error}")
-        if ENABLE_COMPARISON:
-            asyncio.create_task(run_comparison_task(message, context))
     return forwarded
 
 @bot.event
