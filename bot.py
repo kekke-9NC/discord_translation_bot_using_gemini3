@@ -7,6 +7,7 @@ from storage import Store, TranslationPair
 # Gemini API Library
 from google import genai
 from google.genai.types import GenerateContentConfig, ThinkingConfig
+from gemini_settings import GEMINI_MODEL
 
 # --- Configuration ---
 # Get the directory of the executable file
@@ -28,7 +29,7 @@ STORE = Store(os.environ.get("BOT_DATABASE", os.path.join(BASE_DIR, "bot.sqlite3
 # Conversation history: keeps the last 10 messages for each target channel
 conversation_memory = {}
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
+gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1beta'})
 async_client = gemini_client.aio
 
 async def translate_text(text: str, source_language: str, target_language: str,
@@ -43,10 +44,10 @@ async def translate_text(text: str, source_language: str, target_language: str,
         f"Context:\n<context>\n{context[-4000:]}\n</context>\nOutput only the translation."
     )
     response = await async_client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
+        model=GEMINI_MODEL,
         contents=text,
         config=GenerateContentConfig(system_instruction=instruction, temperature=0, candidate_count=1,
-            thinking_config=ThinkingConfig(include_thoughts=False)))
+            thinking_config=ThinkingConfig(thinking_level="minimal")))
     if not response.text:
         raise RuntimeError("Translation provider returned an empty response")
     return response.text.strip()
@@ -62,7 +63,7 @@ class SuggestReplyView(discord.ui.View):
         super().__init__(timeout=None)
         self.source_channel_id = source_channel_id
 
-    @discord.ui.button(label="Suggest Reply (Gemini-3 Flash)", style=discord.ButtonStyle.success, emoji="💡")
+    @discord.ui.button(label="Suggest Reply (Gemma 4)", style=discord.ButtonStyle.success, emoji="💡")
     async def suggest_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
@@ -76,20 +77,20 @@ class SuggestReplyView(discord.ui.View):
 
         try:
             response = await async_client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model=GEMINI_MODEL,
                 contents="Generate a reply suggestion.",
                 config=GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.7, 
                     candidate_count=1,
-                    thinking_config=ThinkingConfig(include_thoughts=False)
+                    thinking_config=ThinkingConfig(thinking_level="minimal")
                 )
             )
             suggestion = response.text.strip()
         except Exception as e:
             suggestion = f"Generation error: {e}"
 
-        await interaction.followup.send(content=f"💡 **Reply Suggestion (Gemini-3 Flash)**:\n\n{suggestion}", ephemeral=True)
+        await interaction.followup.send(content=f"💡 **Reply Suggestion (Gemma 4)**:\n\n{suggestion}", ephemeral=True)
 
 intents = discord.Intents.default()
 intents.message_content = True
