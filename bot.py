@@ -7,7 +7,6 @@ import aiohttp
 import random
 import csv
 import datetime
-import json
 from storage import Store, TranslationPair
 
 # Gemini API Library
@@ -53,7 +52,6 @@ if not os.path.exists(os.path.join(BASE_DIR, COMPARISON_LOG_FILE)):
         writer.writerow(["Timestamp", "SourceChannelID", "MessageID", "ModelA", "ModelB", "Selected", "WinnerModel"])
 
 STORE = Store(os.environ.get("BOT_DATABASE", os.path.join(BASE_DIR, "bot.sqlite3")))
-forward_map = {}
 
 # Conversation history: keeps the last 10 messages for each target channel
 conversation_memory = {}
@@ -92,82 +90,6 @@ def get_conversation_context(channel_id: int) -> str:
     """Returns the conversation history for a specific channel."""
     messages = conversation_memory.get(channel_id, [])
     return "\n".join(messages)
-
-async def translate_to_english(text: str, context: str = "") -> str:
-    """Translates Japanese text to English using Gemini."""
-    system_instruction = (
-        "You are a professional translator. Follow the instructions below.\n\n"
-        "### Conversation Context (DO NOT TRANSLATE):\n"
-        "The following content is for reference only. Do not translate this content or include it in the output.\n"
-        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
-        "### Translation Instructions:\n"
-        "Translate the input Japanese text into English accurately while preserving its original nuance and meaning.\n"
-        "Do not translate Discord emojis or mentions (e.g., :smile: or @username); output them as is.\n"
-        "Output ONLY the translated text without any preamble."
-    )
-    response = await async_client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=text,
-        config=GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0,
-            candidate_count=1,
-            thinking_config=ThinkingConfig(include_thoughts=False)
-        )
-    )
-    return response.text.strip()
-
-async def translate_to_japanese(text: str, context: str = "") -> str:
-    """Translates English text to Japanese using Gemini."""
-    system_instruction = (
-        "You are a professional translator. Follow the instructions below.\n\n"
-        "### Conversation Context (DO NOT TRANSLATE):\n"
-        "The following content is for reference only. Do not translate this content or include it in the output.\n"
-        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
-        "### Translation Instructions:\n"
-        "Translate the input English text into Japanese accurately while preserving its original nuance and meaning.\n"
-        "Do not translate Discord emojis or mentions (e.g., :smile: or @username); output them as is.\n"
-        "Output ONLY the translated text without any preamble."
-    )
-    response = await async_client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=text,
-        config=GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0,
-            candidate_count=1,
-            thinking_config=ThinkingConfig(include_thoughts=False)
-        )
-    )
-    return response.text.strip()
-
-async def safe_translate_to_english(text: str, context: str, max_retries: int = 2) -> str:
-    """Wrapper for translate_to_english with retries and language verification."""
-    last_result = ""
-    for attempt in range(max_retries + 1):
-        try:
-            result = await translate_to_english(text, context=context)
-        except Exception:
-            result = ""
-        if result and not is_japanese(result):
-            return result
-        last_result = result
-        await asyncio.sleep(1)
-    return last_result if last_result else "Translation error."
-
-async def safe_translate_to_japanese(text: str, context: str, max_retries: int = 2) -> str:
-    """Wrapper for translate_to_japanese with retries and language verification."""
-    last_result = ""
-    for attempt in range(max_retries + 1):
-        try:
-            result = await translate_to_japanese(text, context=context)
-        except Exception:
-            result = ""
-        if result and is_japanese(result):
-            return result
-        last_result = result
-        await asyncio.sleep(1)
-    return last_result if last_result else "Translation error (JP)."
 
 # --- LM Studio Comparison Logic ---
 
@@ -475,8 +397,6 @@ async def forward_message(message: discord.Message) -> discord.Message | None:
         mention_author=False, allowed_mentions=discord.AllowedMentions.none())
     STORE.save_message_link(guild_id, message.channel.id, message.id,
                             forwarded.channel.id, forwarded.id)
-    forward_map[(message.channel.id, message.id)] = forwarded
-    forward_map[(forwarded.channel.id, forwarded.id)] = message
     conversation_memory.setdefault(message.channel.id, []).append(
         f"{message.author.display_name}: {message.content}")
     conversation_memory[message.channel.id] = conversation_memory[message.channel.id][-10:]
