@@ -12,7 +12,7 @@ A Discord bot that provides real-time bilingual translation (Japanese ↔ Englis
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Discord Bot Token
 - Google Gemini API Key
 - (Optional) LM Studio for A/B testing
@@ -29,18 +29,12 @@ A Discord bot that provides real-time bilingual translation (Japanese ↔ Englis
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: You may need to install `discord.py`, `google-genai`, `aiohttp` if not in requirements)*
 
 3.  **Configuration**
     Create the following files in the root directory:
     -   `discord_token.txt`: Paste your Discord Bot Token.
     -   `gemini_api_key.txt`: Paste your Google Gemini API Key.
-    -   **Channel Pairing**: Open `bot.py` and configure the `CHANNEL_JA_EN_PAIRS` dictionary with your Discord channel IDs:
-        ```python
-        CHANNEL_JA_EN_PAIRS = {
-            123456789012345678: 987654321098765432,  # Japanese Channel ID : English Channel ID
-        }
-        ```
+    -   **Channel pairing**: After starting the bot, use `/pair_add` in your server to choose the source and destination channels and their languages.
 
 4.  **Run the Bot**
     ```bash
@@ -49,8 +43,18 @@ A Discord bot that provides real-time bilingual translation (Japanese ↔ Englis
 
 ## Usage
 
--   **Channel Pairing**: Configure `CHANNEL_JA_EN_PAIRS` in `bot.py` to link Japanese and English channels.
+-   **Channel pairing**: Use `/pair_add` and `/pair_remove` in Discord.
 -   **A/B Testing**: Set `ENABLE_COMPARISON = True` in `bot.py` to enable the model comparison voting system.
+
+## Server setup and multilingual translation
+
+Use `/pair_add` in a server to connect two text channels and set their language names or codes (for example `Japanese` and `English`, or `ja` and `fr`). The bot translates posts from either channel to the other. `/pair_remove` removes a pair. These commands require the **Manage Server** permission.
+
+Use `/glossary_add` to define a server-specific term with its source and target languages, `/glossary_remove` to delete it, and `/glossary_list` to view terms for a language direction. Glossary changes are limited to users with **Manage Server**; terms are stored separately for each Discord server and language direction.
+
+Replies to mirrored messages link to the corresponding mirrored message. Source threads are mirrored as threads in the paired channel, and message/thread correspondence is persisted in `bot.sqlite3` so replies continue to work after a restart. Raw edit/delete events use these saved links even when the source message is no longer in discord.py's in-memory cache. Keep this database file backed up with the bot's configuration.
+
+Set `GEMINI_MODEL` to select the Gemini model and `BOT_DATABASE` to place the SQLite database elsewhere. Enable the Message Content intent in the Discord Developer Portal and grant the bot view/send permissions in both paired channels; it also needs permission to create threads to mirror source threads.
 
 ## License
 
